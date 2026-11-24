@@ -55,16 +55,18 @@ INSERT_BATCH = """
     ON CONFLICT (collection_dir, file_sha256) DO NOTHING RETURNING id
 """
 UPSERT_REVIEW = """
-    INSERT INTO amazon_reviews.reviews AS current
+    INSERT INTO amazon_reviews.reviews AS r
         (marketplace, asin, review_id, review_date, star, title, content, author,
          purchased, vine, helpful, skus, collected_at)
     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     ON CONFLICT (marketplace, asin, review_id) DO UPDATE SET
-        (review_date, star, title, content, author, purchased, vine, helpful, skus, collected_at)
-        = (excluded.review_date, excluded.star, excluded.title, excluded.content,
-           excluded.author, excluded.purchased, excluded.vine, excluded.helpful,
-           excluded.skus, excluded.collected_at)
-    WHERE current.collected_at < excluded.collected_at
+        (review_date, star, title, content, author, purchased, vine, helpful, skus, collected_at) =
+        (excluded.review_date, excluded.star, excluded.title, excluded.content, excluded.author,
+         excluded.purchased, excluded.vine, excluded.helpful, excluded.skus, excluded.collected_at)
+    WHERE (r.review_date, r.star, r.title, r.content, r.author, r.purchased, r.vine, r.helpful, r.skus)
+        IS DISTINCT FROM
+        (excluded.review_date, excluded.star, excluded.title, excluded.content, excluded.author,
+         excluded.purchased, excluded.vine, excluded.helpful, excluded.skus)
 """
 
 
@@ -103,10 +105,11 @@ def import_reviews(batch: Batch):
             else:
                 batch_id, count = row[0], batch.count
                 for r in sorted(batch.reviews, key=lambda item: item.reviewId):
-                    db.execute(UPSERT_REVIEW, (batch.marketplace, batch.asin, r.reviewId,
-                               r.date, r.star, r.title, r.content, r.author, r.purchased,
-                               r.vine, r.helpful, None if r.skus is None else Jsonb(r.skus),
-                               batch.collectedAt))
+                    db.execute(UPSERT_REVIEW, (
+                        batch.marketplace, batch.asin, r.reviewId, r.date, r.star, r.title,
+                        r.content, r.author, r.purchased, r.vine, r.helpful,
+                        None if r.skus is None else Jsonb(r.skus), batch.collectedAt,
+                    ))
     except psycopg.Error:
         raise HTTPException(503, "Reviews database transaction failed")
     return {"batchId": batch_id, "sha256": batch.sha256, "count": count, "replayed": replay}
