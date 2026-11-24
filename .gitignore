@@ -1,0 +1,12 @@
+outputs/
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.xlsx
+.pytest_cache/

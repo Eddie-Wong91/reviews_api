@@ -1,0 +1,9 @@
+name: amazon-reviews
+services:
+  reviews-api:
+    build: .
+    restart: unless-stopped
+    network_mode: bridge
+    env_file: .env
+    ports:
+      - "${REVIEWS_BIND_IP:-127.0.0.1}:${REVIEWS_PORT:-30003}:8000"
