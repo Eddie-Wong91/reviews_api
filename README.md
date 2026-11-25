@@ -16,7 +16,7 @@ Excel 使用“评论明细”和“查询与扣次”两张工作表。时间�
 
 ## 部署独立服务
 
-将 `reviews_api/` 同步到服务器（例如 `/opt/amazon_reviews_api/`）。先确认内网端口 30003 可用，并确认 API 容器可达现有 PostgreSQL。首次部署时，用管理账号连接目标数据库 `amazon_db`，执行 `sql/001_init_reviews.sql`。已完成初始化和授权的部署可直接更新服务。为运行账号设置密码；例如在管理员 psql 会话中创建专用角色并授权（已有角色可跳过创建）。
+将 `reviews_api/` 同步到服务器（例如 `/opt/amazon_reviews_api/`），保留服务器原有的 .env。确认内网端口 30003 可用，且容器可达 PostgreSQL。首次部署时用管理账号在 amazon_db 依次执行 sql/001_init_reviews.sql 和 sql/002_review_overlap.sql，再为运行账号授权。已有 001 的部署按下方升级步骤操作。首次创建角色的示例：
 
 ```sql
 CREATE ROLE amazon_reviews_api LOGIN;
@@ -36,3 +36,30 @@ curl --fail http://192.168.3.36:30003/health/ready
 ```
 
 SQL 迁移由管理员执行。后续发布评论服务时在这个独立的 Compose 项目下更新镜像。
+
+## 已部署实例升级与验证
+
+先同步新版 reviews_api 目录，暂停导入任务。在部署目录运行以下命令。psql 使用管理员的连接设置（含实际主机及用户）；002 仅执行一次。迁移事务成功后再启动新版 API。原有表级权限已覆盖新增字段。
+
+```sh
+cd /opt/amazon_reviews_api
+docker compose stop reviews-api
+psql -X -v ON_ERROR_STOP=1 -d amazon_db -f sql/002_review_overlap.sql
+docker compose up -d --build --no-deps reviews-api
+docker compose ps reviews-api
+curl --fail http://192.168.3.36:30003/health/ready
+```
+
+如管理员通过 PostgreSQL 容器内的 psql 连接，将 SQL 文件通过标准输入传给该容器的 psql，并指定目标库 amazon_db。健康检查应返回 `{"ready":true}`；失败时用 `docker compose logs --tail=100 reviews-api` 查看原因，排除后再恢复采集。切换期间保持旧版写入暂停，以免新增评论被误认为迁移前库存。
+
+## 每日采集与人工跟进
+
+每日总查询的工作簿导入时加 `--daily`。回执里 hadPriorReviews 表示基准开始前有无此站点、此 ASIN 的历史评论；overlapCount 是文件中与这份历史匹配的 ID 数。首次建档或未满 20 条即结束。已有历史、满 20 条且零重叠时，才分星补查。衔接只说明命中历史 ID；延迟收录和同日排序仍可能造成遗漏。
+
+补查时把总查询返回的 batchId 作为固定基准。例如导入五星补查文件：
+
+```powershell
+python scripts/import_reviews.py "outputs/<新的采集目录>/评论.xlsx" --baseline-batch-id 120 --follow-up-star 5
+```
+
+人工跟进时额外加 `--manual`。疑似缺口与人工结果按北京时间追加到 outputs/follow-up/YYYY-MM-DD.jsonl，同一缺口由站点、ASIN、星级和原总查询批次共同定位。每次新查询用新的工作簿；同一文件重试用原参数。迁移前已存在的评论参与新任务的历史核对，旧批次重放时历史统计为空。
